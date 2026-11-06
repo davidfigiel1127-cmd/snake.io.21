@@ -1,15 +1,17 @@
-# Snake 3D
+# snake.io.21 🐍
 
-**Play it here: https://davidfigiel1127-cmd.github.io/snake-game/**
+**Play it here: https://davidfigiel1127-cmd.github.io/snake.io.21/**
 
-The classic Snake game in 3D, playable right in your web browser.
+A 3D snake game in your browser. Pick a nickname and a skin, then jump in.
 
 ## Modes
-- **Solo** – eat apples, grow, and beat your best score.
-- **vs AI** – race an orange rival snake for the apples. First to 20 apples wins, or outlast the rival: if it crashes into a wall, itself or your body, you win. In a head-on crash the longer snake wins. Pick the AI's difficulty: Easy, Normal or Hard.
+- **Arena** – a big 40×40 arena with 7 AI snakes. Eat apples to grow, hold **Shift** to boost (it costs length), and make other snakes crash into your body to take them out. Fallen snakes leave glowing food behind. Live leaderboard, name tags and minimap.
+- **Classic Solo** – the classic game: eat, grow, beat your best score.
+- **1 vs 1 AI** – race a rival snake to 20 apples, or make it crash first. Easy, Normal or Hard.
 
 ## Controls
-- Arrow keys / WASD – steer
-- C – switch between Overview and Chase camera (in Chase cam, left/right turn the snake)
-- Space – pause, or restart after a game
-- Swipe on mobile
+- Arrow keys / WASD – steer (swipe on mobile)
+- Shift – boost in Arena (BOOST button on mobile)
+- C – switch between Top and Chase camera
+- Space – pause, or start again after a game
+- M – sound on/off
