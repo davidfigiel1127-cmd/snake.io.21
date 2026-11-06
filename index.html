@@ -4,6 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Snake 3D</title>
+<meta name="description" content="Snake in 3D — play solo or race an AI rival snake, right in your browser.">
+<meta property="og:title" content="Snake 3D">
+<meta property="og:description" content="Play Snake in 3D — solo or against an AI rival.">
+<meta name="theme-color" content="#0b1020">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐍</text></svg>">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; overflow: hidden; background: #0b1020; }
@@ -40,6 +45,8 @@
   .diff button.on { background: #fb923c; color: #0b1020; }
   .help { position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%); color: #64748b; font-size: 0.9rem; text-align: center; width: 95%; }
   #err { color: #f87171; }
+  .gh { color: #64748b; font-size: 0.85rem; text-decoration: none; }
+  .gh:hover { color: #cbd5e1; }
 </style>
 <script type="importmap">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
@@ -65,6 +72,7 @@
     <button data-d="hard">Hard</button>
   </div>
   <p id="err"></p>
+  <a class="gh" href="https://github.com/davidfigiel1127-cmd/snake-game" target="_blank" rel="noopener">View source on GitHub</a>
 </div>
 <p class="help">Arrows / WASD steer &middot; C switches camera (Chase cam: left/right turn) &middot; Space pauses / restarts &middot; Swipe on mobile &middot; vs AI: first to 20 apples, or outlast the rival</p>
 
@@ -135,19 +143,84 @@ starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
 const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0x94a3b8, size: 0.25, fog: false }));
 scene.add(stars);
 
-// ---------- shared geometry ----------
-const bodyGeo = new THREE.SphereGeometry(0.42, 20, 14);
-const headGeo = new THREE.SphereGeometry(0.5, 24, 18);
-const scleraGeo = new THREE.SphereGeometry(0.13, 12, 10);
-const pupilGeo = new THREE.SphereGeometry(0.07, 10, 8);
-const whiteMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 });
-const blackMat = new THREE.MeshStandardMaterial({ color: 0x0b1020, roughness: 0.2 });
-const tongueMat = new THREE.MeshStandardMaterial({ color: 0xe11d48 });
-const tongueGeo = new THREE.BoxGeometry(0.06, 0.03, 0.35).translate(0, 0, 0.175);
+const blackMat = new THREE.MeshStandardMaterial({ color: 0x050505, roughness: 0.1 });
+const tongueMat = new THREE.MeshStandardMaterial({ color: 0xe11d48, roughness: 0.4 });
 
-// ---------- snakes ----------
+// ---------- snake model ----------
+// The body is one continuous tube that follows a smooth curve through the cells.
+// Its vertices are rebuilt every frame, so it bends, tapers, slithers and bulges.
+const RADIAL = 18, PER_CELL = 6, MAX_CELLS = 402;
+const MAX_RINGS = (MAX_CELLS - 1) * PER_CELL + 1;
+const tubeIndex = (() => {
+  const idx = new Uint32Array((MAX_RINGS - 1) * RADIAL * 6);
+  let k = 0;
+  for (let r = 0; r < MAX_RINGS - 1; r++) for (let j = 0; j < RADIAL; j++) {
+    const a = r * (RADIAL + 1) + j, b = a + RADIAL + 1;
+    idx.set([a, a + 1, b, b, a + 1, b + 1], k); k += 6;
+  }
+  return new THREE.BufferAttribute(idx, 1);
+})();
+const BODY_R = 0.36, FLAT = 0.8; // body radius, belly flattening
+const smooth = (e0, e1, x) => { const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t); };
+
+function makeHead(topHex, bellyHex, eyeHex) {
+  const g = new THREE.Group();
+  const geo = new THREE.SphereGeometry(0.5, 36, 26);
+  const pos = geo.attributes.position, cols = new Float32Array(pos.count * 3);
+  const top = new THREE.Color(topHex), belly = new THREE.Color(bellyHex), dark = new THREE.Color(topHex).multiplyScalar(0.45), c = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    let x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const fwd = Math.max(0, z) / 0.5;               // 0 at middle, 1 at snout tip
+    x *= 0.95 * (1 - 0.4 * fwd);                    // narrower snout
+    y *= 0.62 * (1 - 0.3 * fwd) * (y > 0 ? 0.88 : 1); // flat top, deeper jaw
+    z = z * 1.3 + 0.12;
+    pos.setXYZ(i, x, y, z);
+    // colour: belly underneath, a dark crown pattern on top
+    const oy = pos.getY(i);
+    c.copy(belly).lerp(top, smooth(-0.12, 0.04, oy));
+    const crown = smooth(0.08, 0.2, oy) * (0.5 + 0.5 * Math.cos(z * 9)) * smooth(-0.4, 0.1, -Math.abs(x) * 2 + 0.3);
+    c.lerp(dark, crown * 0.55);
+    cols.set([c.r, c.g, c.b], i * 3);
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+  geo.computeVertexNormals();
+  const skull = new THREE.Mesh(geo, new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.38, clearcoat: 0.6, clearcoatRoughness: 0.3 }));
+  skull.castShadow = true;
+  g.add(skull);
+
+  const eyeMat = new THREE.MeshPhysicalMaterial({ color: eyeHex, roughness: 0.1, clearcoat: 1, emissive: eyeHex, emissiveIntensity: 0.25 });
+  for (const s of [-1, 1]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.105, 16, 12), eyeMat);
+    eye.position.set(0.33 * s, 0.1, 0.3);
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 10), blackMat);
+    pupil.scale.set(0.45, 1.5, 0.35);      // vertical slit
+    pupil.position.set(0.075 * s, 0, 0.02);
+    eye.add(pupil);
+    const brow = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 8), skull.material);
+    brow.scale.set(1, 0.35, 1.2);
+    brow.position.set(0.3 * s, 0.17, 0.3);
+    brow.material = new THREE.MeshPhysicalMaterial({ color: new THREE.Color(topHex).multiplyScalar(0.8), roughness: 0.4, clearcoat: 0.5 });
+    const nostril = new THREE.Mesh(new THREE.SphereGeometry(0.025, 8, 6), blackMat);
+    nostril.position.set(0.07 * s, 0.07, 0.74);
+    g.add(eye, brow, nostril);
+  }
+  // forked tongue
+  const tongue = new THREE.Group();
+  tongue.position.set(0, -0.06, 0.72);
+  const stem = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.014, 0.3).translate(0, 0, 0.15), tongueMat);
+  tongue.add(stem);
+  for (const s of [-1, 1]) {
+    const prong = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.012, 0.13).translate(0, 0, 0.065), tongueMat);
+    prong.position.set(0, 0, 0.29);
+    prong.rotation.y = 0.45 * s;
+    tongue.add(prong);
+  }
+  g.add(tongue);
+  return { group: g, tongue };
+}
+
 class Snake {
-  constructor({ color, headColor, cells, dirIdx, isAI }) {
+  constructor({ base, dark, belly, head, eye, cells, dirIdx, isAI }) {
     this.cells = cells;
     this.prev = cells.map(c => ({ ...c }));
     this.dirIdx = dirIdx;
@@ -156,49 +229,61 @@ class Snake {
     this.score = 0;
     this.dead = false;
     this.bulges = [];
+    this.pts = [];
     this.yaw = Math.atan2(DIRS[dirIdx].x, DIRS[dirIdx].z);
+    this.cBase = new THREE.Color(base); this.cDark = new THREE.Color(dark); this.cBelly = new THREE.Color(belly);
     this.group = new THREE.Group();
     scene.add(this.group);
-    this.mat = new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.1 });
-    this.headMat = new THREE.MeshStandardMaterial({ color: headColor, roughness: 0.3, emissive: headColor, emissiveIntensity: 0.15 });
-    this.head = new THREE.Mesh(headGeo, this.headMat);
-    this.head.scale.set(1, 0.85, 1.15);
-    this.head.castShadow = true;
-    for (const s of [-1, 1]) {
-      const eye = new THREE.Mesh(scleraGeo, whiteMat);
-      eye.position.set(0.2 * s, 0.2, 0.32);
-      const pupil = new THREE.Mesh(pupilGeo, blackMat);
-      pupil.position.set(0, 0, 0.09);
-      eye.add(pupil);
-      this.head.add(eye);
-    }
-    this.tongue = new THREE.Mesh(tongueGeo, tongueMat);
-    this.tongue.position.set(0, -0.08, 0.5);
-    this.head.add(this.tongue);
+
+    const n = MAX_RINGS * (RADIAL + 1) * 3;
+    this.geo = new THREE.BufferGeometry();
+    this.geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n), 3).setUsage(THREE.DynamicDrawUsage));
+    this.geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(n), 3).setUsage(THREE.DynamicDrawUsage));
+    this.geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n), 3).setUsage(THREE.DynamicDrawUsage));
+    this.geo.setIndex(tubeIndex);
+    this.mat = new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.42, clearcoat: 0.55, clearcoatRoughness: 0.35, sheen: 0.4, sheenColor: new THREE.Color(base) });
+    this.tube = new THREE.Mesh(this.geo, this.mat);
+    this.tube.castShadow = true;
+    this.tube.frustumCulled = false;
+    this.group.add(this.tube);
+
+    const h = makeHead(head, belly, eye);
+    this.head = h.group; this.tongue = h.tongue;
     this.group.add(this.head);
-    this.body = [];    // spheres on each cell (except head)
-    this.fillers = []; // spheres between cells so the body looks continuous
-    this.sync();
+    this.frags = [];
   }
-  sync() {
-    const want = this.cells.length - 1;
-    while (this.body.length < want) {
-      const b = new THREE.Mesh(bodyGeo, this.mat), f = new THREE.Mesh(bodyGeo, this.mat);
-      b.castShadow = f.castShadow = true;
-      this.group.add(b, f);
-      this.body.push(b); this.fillers.push(f);
-    }
+  sync() {}
+  get parts() { return [this.head, ...this.frags]; }
+  radiusAt(s, len) {
+    const u = s / Math.max(1, len - 1);
+    let r = BODY_R * (0.82 + 0.18 * smooth(0, 1.3, s));          // slim neck
+    r *= 1 - 0.92 * Math.pow(smooth(0.45, 1, u), 1.3);             // taper to a pointed tail
+    for (const b of this.bulges) r += 0.16 * Math.exp(-((s - b) ** 2) * 1.2);
+    return Math.max(0.015, r);
   }
-  get parts() { return [this.head, ...this.body, ...this.fillers]; }
   explode() {
     this.dead = true;
+    this.tube.visible = false;
+    // break the body into chunks that fly apart
+    const len = this.cells.length;
+    const curve = this.curve;
+    for (let s = 0.5; s < len - 0.5; s += 0.6) {
+      const r = this.radiusAt(s, len);
+      const m = new THREE.Mesh(chunkGeo, new THREE.MeshStandardMaterial({ color: Math.floor(s / 0.6) % 3 ? this.cBase : this.cDark, roughness: 0.4 }));
+      m.scale.set(r, r * FLAT, r);
+      if (curve) curve.getPoint(s / (len - 1), m.position); else m.position.copy(toWorld(this.cells[Math.floor(s)]));
+      m.castShadow = true;
+      this.group.add(m);
+      this.frags.push(m);
+    }
     for (const p of this.parts) {
       p.userData.v = new THREE.Vector3((Math.random() - 0.5) * 8, Math.random() * 7 + 3, (Math.random() - 0.5) * 8);
       p.userData.spin = new THREE.Vector3(Math.random() * 8, Math.random() * 8, Math.random() * 8);
     }
   }
-  dispose() { scene.remove(this.group); this.mat.dispose(); this.headMat.dispose(); }
+  dispose() { scene.remove(this.group); this.geo.dispose(); this.mat.dispose(); }
 }
+const chunkGeo = new THREE.SphereGeometry(1, 12, 10);
 
 // ---------- apples ----------
 const appleGeo = new THREE.SphereGeometry(0.36, 24, 18);
@@ -278,9 +363,9 @@ function clearWorld() {
 function startGame(m) {
   mode = m;
   clearWorld();
-  player = new Snake({ color: 0x22c55e, headColor: 0x86efac, cells: [{ x: 6, z: 12 }, { x: 6, z: 13 }, { x: 6, z: 14 }], dirIdx: 0, isAI: false });
+  player = new Snake({ base: 0x2f9e44, dark: 0x0f3d1e, belly: 0xeae6bf, head: 0x37b24d, eye: 0xfacc15, cells: [{ x: 6, z: 12 }, { x: 6, z: 13 }, { x: 6, z: 14 }], dirIdx: 0, isAI: false });
   if (mode === 'vs') {
-    rival = new Snake({ color: 0xea580c, headColor: 0xfdba74, cells: [{ x: 13, z: 7 }, { x: 13, z: 6 }, { x: 13, z: 5 }], dirIdx: 2, isAI: true });
+    rival = new Snake({ base: 0xe8590c, dark: 0x3b1206, belly: 0xffe8cc, head: 0xf76707, eye: 0xa3e635, cells: [{ x: 13, z: 7 }, { x: 13, z: 6 }, { x: 13, z: 5 }], dirIdx: 2, isAI: true });
   } else {
     player.cells = [{ x: 10, z: 10 }, { x: 10, z: 11 }, { x: 10, z: 12 }];
     player.prev = player.cells.map(c => ({ ...c }));
@@ -500,7 +585,7 @@ addEventListener('resize', () => {
 
 // ---------- animation ----------
 const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3();
-const pts = [];
+const P = new THREE.Vector3(), T = new THREE.Vector3(), SIDE = new THREE.Vector3(), COL = new THREE.Color();
 
 function animateSnake(s, t, time, dt) {
   if (s.dead) {
@@ -508,7 +593,7 @@ function animateSnake(s, t, time, dt) {
       const v = p.userData.v;
       v.y -= 18 * dt;
       p.position.addScaledVector(v, dt);
-      if (p.position.y < 0.3 && v.y < 0) { p.position.y = 0.3; v.y *= -0.4; v.x *= 0.7; v.z *= 0.7; }
+      if (p.position.y < 0.15 && v.y < 0) { p.position.y = 0.15; v.y *= -0.4; v.x *= 0.7; v.z *= 0.7; }
       p.rotation.x += p.userData.spin.x * dt; p.rotation.y += p.userData.spin.y * dt;
     }
     return;
@@ -516,46 +601,67 @@ function animateSnake(s, t, time, dt) {
   const len = s.cells.length;
   s.bulges = s.bulges.map(b => b + dt * 1000 / stepMs * 1.4).filter(b => b < len + 1);
 
+  // where each cell's joint is right now (gliding between steps) plus a slither wave
+  const pts = s.pts;
   for (let i = 0; i < len; i++) {
-    const a = toWorld(s.prev[i] || s.cells[i]), b = toWorld(s.cells[i]);
+    const a = toWorld(s.prev[i] || s.cells[i], 0), b = toWorld(s.cells[i], 0);
     const p = (pts[i] ||= new THREE.Vector3()).lerpVectors(a, b, t);
-    if (i > 0) { // slither: sideways wave travelling down the body
+    if (i > 0) {
       const ahead = s.cells[i - 1], here = s.cells[i];
       const fx = ahead.x - here.x, fz = ahead.z - here.z;
-      const w = Math.sin(time * 9 - i * 0.9) * 0.08 * Math.min(1, i / 3);
+      const w = Math.sin(time * 8 - i * 0.85) * 0.1 * Math.min(1, i / 2.5);
       p.x += -fz * w; p.z += fx * w;
     }
   }
-  const scaleAt = i => {
-    let sc = 1 - 0.35 * (i / Math.max(len, 10));
-    for (const b of s.bulges) sc += 0.35 * Math.exp(-((i - b) ** 2) * 1.5);
-    return sc;
-  };
+  pts.length = len;
+  const curve = s.curve = new THREE.CatmullRomCurve3(pts.slice(0, len), false, 'catmullrom', 0.5);
+
+  // rebuild the tube
+  const rings = (len - 1) * PER_CELL + 1;
+  const pos = s.geo.attributes.position.array, nor = s.geo.attributes.normal.array, col = s.geo.attributes.color.array;
+  let v = 0;
+  for (let r = 0; r < rings; r++) {
+    const u = r / (rings - 1), sc = u * (len - 1);
+    curve.getPoint(u, P);
+    curve.getTangent(u, T);
+    SIDE.set(T.z, 0, -T.x).normalize();
+    const rad = s.radiusAt(sc, len);
+    const cy = rad * FLAT + 0.02;
+    const band = Math.pow(0.5 + 0.5 * Math.cos(sc * Math.PI * 2), 3);        // dark saddle every cell
+    const zig = 0.5 + 0.5 * Math.cos(sc * Math.PI * 4 + 1);                  // smaller side blotches
+    for (let j = 0; j <= RADIAL; j++) {
+      const th = j / RADIAL * Math.PI * 2, c = Math.cos(th), sn = Math.sin(th);
+      pos[v] = P.x + SIDE.x * c * rad;
+      pos[v + 1] = cy + sn * rad * FLAT;
+      pos[v + 2] = P.z + SIDE.z * c * rad;
+      const nx = SIDE.x * c, ny = sn / FLAT, nz = SIDE.z * c, nl = Math.hypot(nx, ny, nz);
+      nor[v] = nx / nl; nor[v + 1] = ny / nl; nor[v + 2] = nz / nl;
+      // scales pattern: saddles on the back, blotches on the flanks, pale belly
+      COL.copy(s.cBase);
+      const back = smooth(0.15, 0.85, sn);
+      COL.lerp(s.cDark, band * back * 0.85);
+      const flank = smooth(0.55, 0.05, Math.abs(sn)) * smooth(0.55, 0.85, zig);
+      COL.lerp(s.cDark, flank * 0.6);
+      const scale = 0.92 + 0.08 * Math.cos(j * 2.4 + sc * 18);             // tiny scale shimmer
+      COL.multiplyScalar(scale);
+      COL.lerp(s.cBelly, smooth(-0.15, -0.55, sn));
+      col[v] = COL.r; col[v + 1] = COL.g; col[v + 2] = COL.b;
+      v += 3;
+    }
+  }
+  s.geo.setDrawRange(0, (rings - 1) * RADIAL * 6);
+  s.geo.attributes.position.needsUpdate = s.geo.attributes.normal.needsUpdate = s.geo.attributes.color.needsUpdate = true;
 
   // head
   const target = Math.atan2(DIRS[s.dirIdx].x, DIRS[s.dirIdx].z);
   s.yaw += Math.atan2(Math.sin(target - s.yaw), Math.cos(target - s.yaw)) * Math.min(1, dt * 14);
-  s.head.position.copy(pts[0]);
-  s.head.position.y = 0.48 + Math.sin(time * 8) * 0.03;
-  s.head.rotation.set(0, s.yaw, Math.sin(time * 9) * 0.06);
-  const hs = 1 + (s.bulges.length && s.bulges[s.bulges.length - 1] < 1 ? 0.15 : 0);
-  s.head.scale.set(hs, 0.85 * hs, 1.15 * hs);
-  const flick = Math.pow(Math.max(0, Math.sin(time * 5 + (s.isAI ? 1.7 : 0))), 12);
+  s.head.position.set(pts[0].x, 0.33 + Math.sin(time * 8) * 0.025, pts[0].z);
+  s.head.rotation.set(Math.sin(time * 4) * 0.04, s.yaw + Math.sin(time * 8) * 0.06, 0);
+  const gulp = s.bulges.length && s.bulges[s.bulges.length - 1] < 0.8 ? 0.12 : 0;
+  s.head.scale.setScalar(1 + gulp);
+  const flick = Math.pow(Math.max(0, Math.sin(time * 5 + (s.isAI ? 1.7 : 0))), 10);
   s.tongue.scale.set(1, 1, 0.01 + flick);
-
-  for (let i = 1; i < len; i++) {
-    const m = s.body[i - 1];
-    m.visible = true;
-    m.position.copy(pts[i]);
-    m.position.y = 0.42 * scaleAt(i) + 0.02;
-    m.scale.setScalar(scaleAt(i));
-    const f = s.fillers[i - 1];
-    f.visible = true;
-    f.position.lerpVectors(pts[i - 1], pts[i], 0.5);
-    const fs = (scaleAt(i - 1) + scaleAt(i)) / 2 * 0.97;
-    f.position.y = 0.42 * fs + 0.02;
-    f.scale.setScalar(fs);
-  }
+  s.tongue.rotation.x = Math.sin(time * 40) * 0.15 * flick;
 }
 
 const clock = new THREE.Clock();

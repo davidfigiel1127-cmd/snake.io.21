@@ -1,5 +1,7 @@
 # Snake 3D
 
+**Play it here: https://davidfigiel1127-cmd.github.io/snake-game/**
+
 The classic Snake game in 3D, playable right in your web browser.
 
 ## Modes
@@ -11,5 +13,3 @@ The classic Snake game in 3D, playable right in your web browser.
 - C – switch between Overview and Chase camera (in Chase cam, left/right turn the snake)
 - Space – pause, or restart after a game
 - Swipe on mobile
-
-Open `index.html` in a browser to play (needs an internet connection to load the three.js 3D engine).
